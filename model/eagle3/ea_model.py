@@ -1,17 +1,26 @@
 import copy
 import json
 import time
+import os
 
 import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer
-import os
 from transformers import PreTrainedModel, PretrainedConfig, AutoConfig
 
+# --- Existing Imports ---
 from .modeling_llama_kv import LlamaForCausalLM as KVLlamaForCausalLM
 from .modeling_mixtral_kv import MixtralForCausalLM as KVMixtralForCausalLM
 from .modeling_qwen2_kv import LlamaForCausalLM as KVQwen2ForCausalLM
+
+try:
+    from .modeling_qwen3_kv import Qwen3ForCausalLM as KVQwen3ForCausalLM
+except ImportError:
+    # Fallback to avoid crashing if the file is missing during initial setup, 
+    # though it will fail at runtime if Qwen3 is requested.
+    KVQwen3ForCausalLM = None 
+
 from .utils import *
 from .kv_cache import initialize_past_key_values
 
@@ -86,7 +95,7 @@ class EaModel(nn.Module):
     @classmethod
     def from_pretrained(
             cls,
-            use_eagle3=True,
+            cls_use_eagle3=True, # Renamed to avoid conflict if passed as kwarg, usually caught in kwargs though
             base_model_path=None,
             ea_model_path=None,
             total_token=60,
@@ -95,6 +104,9 @@ class EaModel(nn.Module):
             threshold=1.0,
             **kwargs,
     ):
+        # Handle use_eagle3 argument
+        use_eagle3 = kwargs.pop('use_eagle3', cls_use_eagle3)
+
         # assert Type=="LLaMA" or "Mixtral"
         Type = AutoConfig.from_pretrained(base_model_path).architectures[0]
 
@@ -106,6 +118,14 @@ class EaModel(nn.Module):
             base_model = KVQwen2ForCausalLM.from_pretrained(
                 base_model_path, **kwargs
             )
+        # --- NEW: Support for Qwen3 ---
+        elif Type == 'Qwen3ForCausalLM':
+            if KVQwen3ForCausalLM is None:
+                raise ImportError("Qwen3ForCausalLM architecture detected, but modular_qwen3.py could not be imported.")
+            base_model = KVQwen3ForCausalLM.from_pretrained(
+                base_model_path, **kwargs
+            )
+        # ------------------------------
         else:
             base_model = KVMixtralForCausalLM.from_pretrained(
                 base_model_path, **kwargs
@@ -127,6 +147,7 @@ class EaModel(nn.Module):
             if not os.path.exists(load_model_path):
                 load_model_path = hf_hub_download(ea_model_path, "model.safetensors")
             ea_layer_state_dict = load_file(load_model_path)
+        
         model = cls(
             use_eagle3,
             base_model,
